@@ -8,7 +8,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
+
+var ignoreDirs = map[string]bool{
+	".git": true,
+	".svn": true,
+}
 
 var printOnly = flag.Bool("n", false, "Don't plumb results, just print them.")
 var editOnly = flag.Bool("e", false, "Force edit, regardless of number of hits.")
@@ -19,12 +25,6 @@ func usage() {
 	flag.PrintDefaults()
 	os.Exit(2)
 }
-
-/*
-
-TODO: "smart" case.
-
-*/
 
 func match1(query, path string) bool {
 	for _, c := range query {
@@ -80,7 +80,14 @@ func main() {
 		dirs = []string{"."}
 	}
 
-	query = strings.ToLower(query)
+	cased := false
+	for _, r := range query {
+		cased = cased || unicode.IsUpper(r)
+	}
+
+	if !cased {
+		query = strings.ToLower(query)
+	}
 
 	matches := []string{}
 
@@ -92,6 +99,9 @@ func main() {
 			}
 
 			if !fi.Mode().IsRegular() {
+				if _, ok := ignoreDirs[filepath.Base(path)]; ok {
+					return filepath.SkipDir
+				}
 				return nil
 			}
 
@@ -100,7 +110,11 @@ func main() {
 				return err
 			}
 
-			if match(query, strings.ToLower(rel)) {
+			if !cased {
+				rel = strings.ToLower(rel)
+			}
+
+			if match(query, rel) {
 				matches = append(matches, path)
 			}
 			return nil
