@@ -1,0 +1,20 @@
+go get -u marius.ae/edit
+
+
+Edit is a "fuzzy" file finder/plumber for Acme.
+
+Usage:
+
+	edit query [dirs...]
+
+Edit executes a query against a set of directories (default: .). If
+there are two or fewer results, edit will automatically plumb the files,
+similar to Plan 9's B command.
+
+Edit traverses each given directory, skipping common database paths
+(.git, .svn), and matches each entry against the query.
+
+A candidate path is admitted if all the characters in the query appear
+in the same order in the path. If the query contains the path separator
+'/' then the characters in the query delimited by that separator must
+appear within a single path element in the candidate path.
