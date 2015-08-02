@@ -15,7 +15,7 @@
 // in the same order in the path. If the query contains the path separator
 // '/' then the characters in the query delimited by that separator must
 // appear within a single path element in the candidate path.
-package main
+package main // import "marius.ae/edit"
 
 import (
 	"flag"
