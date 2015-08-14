@@ -1,21 +1,37 @@
-// Edit is a "fuzzy" file finder/plumber for Acme.
+// Edit is a file finder/plumber for Acme.
 //
 // Usage:
 //
 // 	edit query [dirs...]
 //
-// Edit executes a query against a set of directories (default: .). If there
-// are two or fewer results, edit will automatically plumb the files,
-// similar to Plan 9's B command.
+// Edit executes a query against a set of directories (default: .).
+// If there is exactly one result, edit will automatically plumb the
+// files, similar to Plan 9's B command.
+//
+// The EDITPATH environment variable is a colon-separated list of
+// directories to look for files.
+//
+// Using the invocation:
+//
+//	edit dir:query
+//
+// Edit executes the query against  x/dir for every directory x in EDITPATH.
 //
 // Edit traverses each given directory, skipping common database paths
 // (.git, .svn), and matches each entry against the query.
 //
-// A candidate path is admitted if all the characters in the query appear
-// in the same order in the path. If the query contains the path separator
-// '/' then the characters in the query delimited by that separator must
-// appear within a single path element in the candidate path.
+// Queries are partial paths. A query matches a candidate path 
+// when each path element in the query matches a path element
+// in the candidate path. The elements have to appear in the same
+// order, but not all path elements from the candidate path are
+// required to match.
+//
+// A query path element matches a candidate path element if 
+// (1) it is a substring of the path element; or (2) it is a glob pattern
+// (containing any of "*?[") that matches according to filepath.Match.
 package main // import "marius.ae/edit"
+
+// 	- Scoring/select first
 
 import (
 	"flag"
@@ -43,16 +59,13 @@ func usage() {
 	os.Exit(2)
 }
 
-func match1(query, path string) bool {
-	for _, c := range query {
-		i := strings.IndexRune(path, c)
-		if i < 0 {
-			return false
-		}
-		path = path[i:]
+func match1(q, p string) bool {
+	if strings.IndexAny(q, "*?[") > -1 {
+		ok, _ := filepath.Match(q, p)
+		return ok
+	} else {
+		return strings.Index(p, q) > -1
 	}
-
-	return true
 }
 
 func match(query, path string) bool {
@@ -60,9 +73,9 @@ func match(query, path string) bool {
 	qs := strings.Split(query, "/")
 	i := 0
 
-	for _, q := range qs {
+	for _, q := range qs[:len(qs)-1] {
 		found := false
-		for !found && i < len(ps) {
+		for !found && i < len(ps)-1 {
 			found = match1(q, ps[i])
 			i++
 		}
@@ -71,7 +84,10 @@ func match(query, path string) bool {
 		}
 	}
 
-	return true
+	p := ps[len(ps)-1]
+	q := qs[len(qs)-1]
+
+	return match1(q, p)
 }
 
 func plumb(path string) {
@@ -92,11 +108,6 @@ func main() {
 	}
 
 	query := flag.Arg(0)
-	dirs := flag.Args()[1:]
-	if len(dirs) == 0 {
-		dirs = []string{"."}
-	}
-
 	cased := false
 	for _, r := range query {
 		cased = cased || unicode.IsUpper(r)
@@ -105,6 +116,27 @@ func main() {
 	if !cased {
 		query = strings.ToLower(query)
 	}
+
+	var dirs []string
+	if strings.Contains(query, ":") && flag.NArg() == 1 {
+		i := strings.Index(query, ":")
+		var path string
+		path, query = query[0:i], query[i+1:]
+
+		dirs = filepath.SplitList(os.Getenv("EDITPATH"))
+		for i := range dirs {
+			dirs[i] = filepath.Join(dirs[i], path)
+		}
+	} else {
+		if flag.NArg() == 1 {
+			dirs = []string{"."}
+		} else {
+
+			dirs = flag.Args()[1:]
+		}
+	}
+
+	//	log.Printf("query \"%s\" dirs \"%v\"", query, dirs)
 
 	matches := []string{}
 
@@ -138,7 +170,7 @@ func main() {
 		})
 	}
 
-	if len(matches) < 3 && !*printOnly || *editOnly {
+	if len(matches) == 1 && !*printOnly || *editOnly {
 		for _, path := range matches {
 			plumb(path)
 		}
