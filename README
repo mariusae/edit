@@ -1,20 +1,36 @@
 go get -u marius.ae/edit
 
+COMMAND DOCUMENTATION
 
-Edit is a "fuzzy" file finder/plumber for Acme.
+    Edit is a file finder/plumber for Acme.
 
-Usage:
+    Usage:
 
 	edit query [dirs...]
 
-Edit executes a query against a set of directories (default: .). If
-there are two or fewer results, edit will automatically plumb the files,
-similar to Plan 9's B command.
+    Edit executes a query against a set of directories (default: .). If
+    there is exactly one result, edit will automatically plumb the files,
+    similar to Plan 9's B command.
 
-Edit traverses each given directory, skipping common database paths
-(.git, .svn), and matches each entry against the query.
+    The EDITPATH environment variable is a colon-separated list of
+    directories to look for files.
 
-A candidate path is admitted if all the characters in the query appear
-in the same order in the path. If the query contains the path separator
-'/' then the characters in the query delimited by that separator must
-appear within a single path element in the candidate path.
+    Using the invocation:
+
+	edit dir:query
+
+    Edit executes the query against x/dir for every directory x in EDITPATH.
+
+    Edit traverses each given directory, skipping common database paths
+    (.git, .svn), and matches each entry against the query.
+
+    Queries are partial paths. A query matches a candidate path when each
+    path element in the query matches a path element in the candidate path.
+    The elements have to appear in the same order, but not all path elements
+    from the candidate path are required to match.
+
+    A query path element matches a candidate path element if (1) it is a
+    substring of the path element; or (2) it is a glob pattern (containing
+    any of "*?[") that matches according to filepath.Match.
+
+
