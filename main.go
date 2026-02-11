@@ -38,11 +38,13 @@ func main() {
 			sortByMtime(files)
 		}
 		iter := newSliceIter(files)
-		runMode(iter, *interactive, *printAll)
+		runMode(iter, *interactive, *printAll, "")
 		return
 	}
 
 	pattern := flag.Arg(0)
+	var lineSuffix string
+	pattern, lineSuffix = parseLineSuffix(pattern)
 
 	if strings.HasPrefix(pattern, "/") {
 		if strings.Contains(pattern, "...") {
@@ -65,7 +67,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "edit: %v\n", err)
 				os.Exit(1)
 			}
-			runMode(iter, *interactive, *printAll)
+			runMode(iter, *interactive, *printAll, lineSuffix)
 			return
 		}
 
@@ -79,7 +81,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "edit: %s is a directory\n", pattern)
 			os.Exit(1)
 		}
-		if err := invokeEditor(pattern); err != nil {
+		if err := invokeEditor(pattern + lineSuffix); err != nil {
 			fmt.Fprintf(os.Stderr, "edit: %v\n", err)
 			os.Exit(1)
 		}
@@ -122,10 +124,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "edit: %v\n", err)
 		os.Exit(1)
 	}
-	runMode(iter, *interactive, *printAll)
+	runMode(iter, *interactive, *printAll, lineSuffix)
 }
 
-func runMode(iter *searchIter, interactive, printAll bool) {
+func runMode(iter *searchIter, interactive, printAll bool, suffix string) {
 	if interactive {
 		sel, err := runPicker(iter)
 		if err != nil {
@@ -135,7 +137,7 @@ func runMode(iter *searchIter, interactive, printAll bool) {
 		if sel == "" {
 			os.Exit(0)
 		}
-		if err := invokeEditor(sel); err != nil {
+		if err := invokeEditor(sel + suffix); err != nil {
 			fmt.Fprintf(os.Stderr, "edit: %v\n", err)
 			os.Exit(1)
 		}
@@ -166,7 +168,7 @@ func runMode(iter *searchIter, interactive, printAll bool) {
 		fmt.Fprintln(os.Stderr, "no matches")
 		os.Exit(1)
 	}
-	if err := invokeEditor(path); err != nil {
+	if err := invokeEditor(path + suffix); err != nil {
 		fmt.Fprintf(os.Stderr, "edit: %v\n", err)
 		os.Exit(1)
 	}
@@ -187,6 +189,22 @@ func resolveArgs(args []string) []string {
 		files = append(files, abs)
 	}
 	return files
+}
+
+// parseLineSuffix splits a trailing ":<number>" suffix from s.
+// For example, "foo.go:1234" returns ("foo.go", ":1234").
+// If s does not end with ":<digits>", it returns (s, "").
+func parseLineSuffix(s string) (string, string) {
+	idx := strings.LastIndex(s, ":")
+	if idx <= 0 || idx == len(s)-1 {
+		return s, ""
+	}
+	for _, c := range s[idx+1:] {
+		if c < '0' || c > '9' {
+			return s, ""
+		}
+	}
+	return s[:idx], s[idx:]
 }
 
 // dedup resolves all paths to absolute and removes duplicates, preserving order.
