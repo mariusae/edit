@@ -45,6 +45,30 @@ func main() {
 	pattern := flag.Arg(0)
 
 	if strings.HasPrefix(pattern, "/") {
+		if strings.Contains(pattern, "...") {
+			// Absolute path with ... pattern — extract root and search pattern.
+			parts := strings.Split(pattern, "/")
+			splitAt := 0
+			for i, part := range parts {
+				if strings.Contains(part, "...") {
+					splitAt = i
+					break
+				}
+			}
+			root := strings.Join(parts[:splitAt], "/")
+			if root == "" {
+				root = "/"
+			}
+			searchPattern := strings.Join(parts[splitAt:], "/")
+			iter, err := newSearchIter([]string{root}, searchPattern, *mtime)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "edit: %v\n", err)
+				os.Exit(1)
+			}
+			runMode(iter, *interactive, *printAll)
+			return
+		}
+
 		// Absolute path — use directly
 		info, err := os.Stat(pattern)
 		if err != nil {
