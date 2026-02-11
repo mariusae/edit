@@ -7,9 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/term"
 )
+
+var brailleFrames = [...]rune{'⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'}
 
 type picker struct {
 	allResults []string // absolute paths
@@ -21,6 +24,7 @@ type picker struct {
 	maxVisible int
 	searching  bool
 	pwd        string
+	spinFrame  int
 }
 
 func newPicker(pwd string) *picker {
@@ -171,6 +175,14 @@ func (p *picker) render() {
 		linesDown++
 	}
 
+	if p.searching {
+		if linesDown > 0 {
+			fmt.Fprint(os.Stderr, "\r\n")
+		}
+		fmt.Fprintf(os.Stderr, "\033[2m%c\033[0m\033[K", brailleFrames[p.spinFrame%len(brailleFrames)])
+		linesDown++
+	}
+
 	// Clear any leftover lines from a previous longer render.
 	fmt.Fprint(os.Stderr, "\033[J")
 
@@ -287,6 +299,9 @@ func runPicker(iter *searchIter) (string, error) {
 	iterDone := false
 	search := ""
 
+	ticker := time.NewTicker(80 * time.Millisecond)
+	defer ticker.Stop()
+
 	for {
 		// Determine whether to pull more results from the iterator.
 		var pullCh <-chan string
@@ -302,9 +317,18 @@ func runPicker(iter *searchIter) (string, error) {
 			if !ok {
 				iterDone = true
 				p.searchDone()
+				ticker.Stop()
 				redraw()
 			} else {
 				p.addResult(path)
+				redraw()
+			}
+
+		case <-ticker.C:
+			if !iterDone {
+				p.mu.Lock()
+				p.spinFrame++
+				p.mu.Unlock()
 				redraw()
 			}
 
