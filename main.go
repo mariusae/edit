@@ -30,32 +30,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	cfg := searchConfig{
-		sortByMtime: *mtime,
-		exhaustive:  *printAll || *interactive,
-	}
-
 	// Multiple args means the shell already expanded a glob for us.
 	// Treat them as literal file paths.
 	if flag.NArg() > 1 {
 		files := resolveArgs(flag.Args())
-		if cfg.sortByMtime {
+		if *mtime {
 			sortByMtime(files)
 		}
-		results := make(chan string, len(files))
-		for _, f := range files {
-			results <- f
-		}
-		close(results)
-		dispatchResults(results, cfg, *interactive, *printAll)
+		iter := newSliceIter(files)
+		runMode(iter, *interactive, *printAll)
 		return
 	}
 
 	pattern := flag.Arg(0)
-
-	// Determine roots and pattern handling
-	var roots []string
-	var searchPattern string
 
 	if strings.HasPrefix(pattern, "/") {
 		// Absolute path — use directly
@@ -74,6 +61,10 @@ func main() {
 		}
 		return
 	}
+
+	// Determine roots and search pattern.
+	var roots []string
+	var searchPattern string
 
 	if strings.HasPrefix(pattern, "./") {
 		// Relative to pwd — use pwd as sole root
@@ -102,14 +93,17 @@ func main() {
 		searchPattern = pattern
 	}
 
-	results := make(chan string, 100)
-	go Search(roots, searchPattern, cfg, results)
-	dispatchResults(results, cfg, *interactive, *printAll)
+	iter, err := newSearchIter(roots, searchPattern, *mtime)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "edit: %v\n", err)
+		os.Exit(1)
+	}
+	runMode(iter, *interactive, *printAll)
 }
 
-func dispatchResults(results chan string, cfg searchConfig, interactive, printAll bool) {
+func runMode(iter *searchIter, interactive, printAll bool) {
 	if interactive {
-		sel, err := runPicker(results, cfg)
+		sel, err := runPicker(iter)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "edit: %v\n", err)
 			os.Exit(1)
@@ -126,7 +120,11 @@ func dispatchResults(results chan string, cfg searchConfig, interactive, printAl
 
 	if printAll {
 		found := false
-		for path := range results {
+		for {
+			path, ok := iter.Next()
+			if !ok {
+				break
+			}
 			fmt.Println(path)
 			found = true
 		}
@@ -138,7 +136,8 @@ func dispatchResults(results chan string, cfg searchConfig, interactive, printAl
 	}
 
 	// Default: first match, invoke editor
-	path, ok := <-results
+	path, ok := iter.Next()
+	iter.Close()
 	if !ok {
 		fmt.Fprintln(os.Stderr, "no matches")
 		os.Exit(1)

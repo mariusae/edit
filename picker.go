@@ -79,7 +79,7 @@ func (p *picker) setSearch(s string) bool {
 				filtered = append(filtered, i)
 			}
 		}
-		if len(filtered) == 0 {
+		if len(filtered) == 0 && !p.searching {
 			return false
 		}
 		p.search = s
@@ -140,6 +140,13 @@ func (p *picker) getSelection() string {
 		return ""
 	}
 	return p.allResults[p.filtered[p.selected]]
+}
+
+// wantMore returns true when the picker needs more results to fill the
+// visible area or stay ahead of the scroll position. Must be called with
+// p.mu held.
+func (p *picker) wantMore() bool {
+	return p.selected+p.maxVisible >= len(p.filtered)
 }
 
 // render draws the picker list. Cursor is assumed at line 0, col 0 of the
@@ -228,9 +235,9 @@ func highlightLine(dp, search string, isSelected bool) string {
 
 // runPicker runs the interactive picker and returns the selected file path,
 // or empty string if cancelled. Returns an error if no results are available.
-func runPicker(results <-chan string, cfg searchConfig) (string, error) {
+func runPicker(iter *searchIter) (string, error) {
 	// Wait for at least one result before showing the picker.
-	first, ok := <-results
+	first, ok := iter.Next()
 	if !ok {
 		return "", fmt.Errorf("no matches")
 	}
@@ -251,31 +258,6 @@ func runPicker(results <-chan string, cfg searchConfig) (string, error) {
 	p.allResults = append(p.allResults, first)
 	p.filtered = []int{0}
 
-	// Channel to notify main loop of state changes.
-	notify := make(chan struct{}, 1)
-	poke := func() {
-		select {
-		case notify <- struct{}{}:
-		default:
-		}
-	}
-
-	go func() {
-		for r := range results {
-			p.addResult(r)
-			poke()
-		}
-		p.searchDone()
-		poke()
-	}()
-
-	redraw := func() {
-		fmt.Fprint(os.Stderr, "\r")
-		p.render()
-	}
-
-	redraw()
-
 	type keyEvent struct {
 		b   []byte
 		err error
@@ -295,15 +277,41 @@ func runPicker(results <-chan string, cfg searchConfig) (string, error) {
 		}
 	}()
 
+	redraw := func() {
+		fmt.Fprint(os.Stderr, "\r")
+		p.render()
+	}
+
+	redraw()
+
+	iterDone := false
 	search := ""
+
 	for {
+		// Determine whether to pull more results from the iterator.
+		var pullCh <-chan string
+		p.mu.Lock()
+		needMore := p.wantMore()
+		p.mu.Unlock()
+		if !iterDone && needMore {
+			pullCh = iter.ch
+		}
+
 		select {
-		case <-notify:
-			redraw()
+		case path, ok := <-pullCh:
+			if !ok {
+				iterDone = true
+				p.searchDone()
+				redraw()
+			} else {
+				p.addResult(path)
+				redraw()
+			}
 
 		case ev := <-keyCh:
 			if ev.err != nil {
 				p.clear()
+				iter.Close()
 				return "", ev.err
 			}
 			b := ev.b
@@ -311,11 +319,13 @@ func runPicker(results <-chan string, cfg searchConfig) (string, error) {
 			switch {
 			case len(b) == 1 && b[0] == 27: // Escape
 				p.clear()
+				iter.Close()
 				return "", nil
 
 			case len(b) == 1 && b[0] == 13: // Enter
 				sel := p.getSelection()
 				p.clear()
+				iter.Close()
 				return sel, nil
 
 			case len(b) == 1 && (b[0] == 127 || b[0] == 8): // Backspace

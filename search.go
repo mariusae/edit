@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 type segmentKind int
@@ -102,44 +103,96 @@ func parsePattern(pattern string) ([]segment, error) {
 	return segments, nil
 }
 
-type searchConfig struct {
+// searchIter is a pull-based iterator over file search results.
+// The consumer calls Next() to get results one at a time, providing
+// natural backpressure via the unbuffered channel.
+type searchIter struct {
+	ch          chan string  // unbuffered — backpressure
+	done        chan struct{}
+	once        sync.Once
 	sortByMtime bool
-	exhaustive  bool
 }
 
-// Search finds files matching the pattern across the given root directories.
-// Results are sent on the results channel, which is closed when the search is done.
-func Search(roots []string, pattern string, cfg searchConfig, results chan<- string) {
-	defer close(results)
-
+// newSearchIter parses the pattern, starts a search goroutine, and
+// returns an iterator. The caller must call Close() when done.
+func newSearchIter(roots []string, pattern string, sortByMtime bool) (*searchIter, error) {
 	segments, err := parsePattern(pattern)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "edit: %v\n", err)
-		return
+		return nil, err
 	}
 
-	for _, root := range roots {
-		info, err := os.Stat(root)
-		if err != nil || !info.IsDir() {
-			continue
+	it := &searchIter{
+		ch:          make(chan string),
+		done:        make(chan struct{}),
+		sortByMtime: sortByMtime,
+	}
+
+	go func() {
+		defer close(it.ch)
+		for _, root := range roots {
+			info, err := os.Stat(root)
+			if err != nil || !info.IsDir() {
+				continue
+			}
+			if !it.matchSegments(root, segments) {
+				return // cancelled
+			}
 		}
-		found := matchSegments(root, segments, cfg, results)
-		if found && !cfg.exhaustive {
-			return
+	}()
+
+	return it, nil
+}
+
+// newSliceIter wraps a pre-collected list of files as a searchIter.
+func newSliceIter(files []string) *searchIter {
+	it := &searchIter{
+		ch:   make(chan string),
+		done: make(chan struct{}),
+	}
+	go func() {
+		defer close(it.ch)
+		for _, f := range files {
+			if !it.emit(f) {
+				return
+			}
 		}
+	}()
+	return it
+}
+
+// Next returns the next result. It blocks until a result is available
+// or the iterator is exhausted. Returns ("", false) when done.
+func (it *searchIter) Next() (string, bool) {
+	path, ok := <-it.ch
+	return path, ok
+}
+
+// Close signals the search goroutine to stop.
+func (it *searchIter) Close() {
+	it.once.Do(func() { close(it.done) })
+}
+
+// emit sends a path to the consumer. Returns true if the send succeeded,
+// false if the iterator was closed (cancelled).
+func (it *searchIter) emit(path string) bool {
+	select {
+	case it.ch <- path:
+		return true
+	case <-it.done:
+		return false
 	}
 }
 
 // matchSegments recursively matches path segments starting from base.
-// Returns true if at least one result was emitted.
-func matchSegments(base string, segs []segment, cfg searchConfig, results chan<- string) bool {
+// Returns true to keep going, false if cancelled.
+func (it *searchIter) matchSegments(base string, segs []segment) bool {
 	if len(segs) == 0 {
-		return false
+		return true
 	}
 
 	// Last segment: match files
 	if len(segs) == 1 {
-		return matchLeaf(base, segs[0], cfg, results)
+		return it.matchLeaf(base, segs[0])
 	}
 
 	seg := segs[0]
@@ -148,20 +201,17 @@ func matchSegments(base string, segs []segment, cfg searchConfig, results chan<-
 	switch seg.kind {
 	case segRecursive:
 		// Try matching remaining segments starting from current base
-		found := matchSegments(base, rest, cfg, results)
-		if found && !cfg.exhaustive {
-			return true
+		if !it.matchSegments(base, rest) {
+			return false
 		}
 		// Walk subdirectories (sorted lex), recurse with same ... + remaining
 		dirs := listDirs(base)
 		for _, d := range dirs {
 			sub := filepath.Join(base, d)
-			found = matchSegments(sub, segs, cfg, results) || found // keep "..." in play
-			if found && !cfg.exhaustive {
-				return true
+			if !it.matchSegments(sub, segs) {
+				return false
 			}
 		}
-		return found
 
 	case segWild:
 		if !strings.Contains(seg.pattern, "...") {
@@ -169,18 +219,17 @@ func matchSegments(base string, segs []segment, cfg searchConfig, results chan<-
 			candidate := filepath.Join(base, seg.pattern)
 			info, err := os.Stat(candidate)
 			if err != nil || !info.IsDir() {
-				return false
+				return true
 			}
-			return matchSegments(candidate, rest, cfg, results)
+			return it.matchSegments(candidate, rest)
 		}
 
 		// Wildcard segment — list the directory and filter.
 		prefix, _ := wildPrefix(seg.pattern)
 		entries, err := os.ReadDir(base)
 		if err != nil {
-			return false
+			return true
 		}
-		found := false
 		for _, e := range entries {
 			if !e.IsDir() {
 				continue
@@ -196,24 +245,20 @@ func matchSegments(base string, segs []segment, cfg searchConfig, results chan<-
 				continue
 			}
 			sub := filepath.Join(base, name)
-			if matchSegments(sub, rest, cfg, results) {
-				found = true
-				if !cfg.exhaustive {
-					return true
-				}
+			if !it.matchSegments(sub, rest) {
+				return false
 			}
 		}
-		return found
 	}
 
-	return false
+	return true
 }
 
 // matchLeaf matches files in base against the leaf segment pattern.
-func matchLeaf(base string, seg segment, cfg searchConfig, results chan<- string) bool {
+// Returns true to keep going, false if cancelled.
+func (it *searchIter) matchLeaf(base string, seg segment) bool {
 	if seg.kind == segRecursive {
-		// shouldn't happen due to validation, but be safe
-		return false
+		return true
 	}
 
 	if !strings.Contains(seg.pattern, "...") {
@@ -221,17 +266,16 @@ func matchLeaf(base string, seg segment, cfg searchConfig, results chan<- string
 		candidate := filepath.Join(base, seg.pattern)
 		info, err := os.Stat(candidate)
 		if err != nil || info.IsDir() {
-			return false
+			return true
 		}
-		results <- candidate
-		return true
+		return it.emit(candidate)
 	}
 
 	// Wildcard leaf — list directory and filter.
 	prefix, _ := wildPrefix(seg.pattern)
 	entries, err := os.ReadDir(base)
 	if err != nil {
-		return false
+		return true
 	}
 
 	var files []string
@@ -252,19 +296,18 @@ func matchLeaf(base string, seg segment, cfg searchConfig, results chan<- string
 	}
 
 	if len(files) == 0 {
-		return false
+		return true
 	}
 
-	if cfg.sortByMtime {
+	if it.sortByMtime {
 		sortByMtime(files)
 	} else {
 		sort.Strings(files)
 	}
 
 	for _, f := range files {
-		results <- f
-		if !cfg.exhaustive {
-			return true
+		if !it.emit(f) {
+			return false
 		}
 	}
 	return true
