@@ -74,6 +74,16 @@ func parsePattern(pattern string) ([]segment, error) {
 		}
 		if p == "..." {
 			segments = append(segments, segment{kind: segRecursive})
+		} else if idx := strings.Index(p, "..."); idx > 0 && idx+3 < len(p) {
+			// "foo...bar" in a single segment → split into dir
+			// wildcard "foo..." + recursive + file wildcard "...bar"
+			// so that "monarch...mesh_controller.rs" finds
+			// mesh_controller.rs under dirs starting with "monarch".
+			segments = append(segments,
+				segment{kind: segWild, pattern: p[:idx+3]},
+				segment{kind: segRecursive},
+				segment{kind: segWild, pattern: p[idx:]},
+			)
 		} else {
 			segments = append(segments, segment{kind: segWild, pattern: p})
 		}
@@ -87,16 +97,31 @@ func parsePattern(pattern string) ([]segment, error) {
 		segments = append(segments, segment{kind: segWild, pattern: "..."})
 	}
 
-	// Implicit recursion: if the last segment starts with "..." but is not
+	// Implicit recursion: if the last segment contains "..." but is not
 	// standalone "...", insert a recursive segment before it. This makes
-	// leaf patterns like "...go" automatically recursive, so that
-	// ".../internal/...go" matches files at any depth under "internal".
+	// leaf patterns like "...go" and "monarch...mesh_controller.rs"
+	// automatically recursive.
 	last := len(segments) - 1
-	if segments[last].kind == segWild && strings.HasPrefix(segments[last].pattern, "...") {
+	if segments[last].kind == segWild && strings.Contains(segments[last].pattern, "...") {
 		if last == 0 || segments[last-1].kind != segRecursive {
 			segments = append(segments, segment{})
 			copy(segments[last+1:], segments[last:])
 			segments[last] = segment{kind: segRecursive}
+		}
+	}
+
+	// Implicit recursion for intermediate segments: if a non-final
+	// dir segment contains "...", insert a recursive segment after it
+	// so that e.g. "monarch.../mesh_controller.rs" recurses into
+	// matched dirs rather than only looking one level deep.
+	for i := 0; i < len(segments)-1; i++ {
+		if segments[i].kind == segWild && strings.Contains(segments[i].pattern, "...") {
+			if segments[i+1].kind != segRecursive {
+				segments = append(segments, segment{})
+				copy(segments[i+2:], segments[i+1:])
+				segments[i+1] = segment{kind: segRecursive}
+				i++ // skip inserted segment
+			}
 		}
 	}
 
