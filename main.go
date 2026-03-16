@@ -110,7 +110,13 @@ func main() {
 			os.Exit(1)
 		}
 		if editpath != "" {
-			roots = strings.Split(editpath, ":")
+			// Support both colon-separated (traditional Unix) and
+			// space-separated (fish shell) EDITPATH values.
+			if strings.ContainsRune(editpath, ':') {
+				roots = strings.Split(editpath, ":")
+			} else {
+				roots = strings.Fields(editpath)
+			}
 		}
 		// Append current directory implicitly
 		roots = append(roots, pwd)
