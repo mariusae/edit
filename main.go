@@ -133,6 +133,20 @@ func main() {
 	runMode(iter, *interactive, *printAll, lineSuffix)
 }
 
+// relPath returns a relative path if abs is under the current directory,
+// otherwise returns the absolute path unchanged.
+func relPath(abs string) string {
+	pwd, err := os.Getwd()
+	if err != nil {
+		return abs
+	}
+	rel, err := filepath.Rel(pwd, abs)
+	if err == nil && !strings.HasPrefix(rel, "..") {
+		return rel
+	}
+	return abs
+}
+
 func runMode(iter *searchIter, interactive, printAll bool, suffix string) {
 	if interactive {
 		sel, err := runPicker(iter)
@@ -143,7 +157,7 @@ func runMode(iter *searchIter, interactive, printAll bool, suffix string) {
 		if sel == "" {
 			os.Exit(0)
 		}
-		if err := invokeEditor(sel + suffix); err != nil {
+		if err := invokeEditor(relPath(sel) + suffix); err != nil {
 			fmt.Fprintf(os.Stderr, "edit: %v\n", err)
 			os.Exit(1)
 		}
@@ -157,7 +171,7 @@ func runMode(iter *searchIter, interactive, printAll bool, suffix string) {
 			if !ok {
 				break
 			}
-			fmt.Println(path)
+			fmt.Println(relPath(path))
 			found = true
 		}
 		if !found {
@@ -174,7 +188,7 @@ func runMode(iter *searchIter, interactive, printAll bool, suffix string) {
 		fmt.Fprintln(os.Stderr, "no matches")
 		os.Exit(1)
 	}
-	if err := invokeEditor(path + suffix); err != nil {
+	if err := invokeEditor(relPath(path) + suffix); err != nil {
 		fmt.Fprintf(os.Stderr, "edit: %v\n", err)
 		os.Exit(1)
 	}
