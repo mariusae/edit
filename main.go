@@ -12,7 +12,8 @@ func main() {
 	mtime := flag.Bool("m", false, "sort glob results by mtime (newest first)")
 	printAll := flag.Bool("n", false, "print all matches, don't invoke editor")
 	interactive := flag.Bool("a", false, "interactive file picker")
-	useB := flag.Bool("B", false, "open all matches with B")
+	useB := flag.Bool("B", false, "open first match with B")
+	useBall := flag.Bool("Ball", false, "open all matches with B")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: edit [flags] <pattern>\n\n")
 		fmt.Fprintf(os.Stderr, "Search $EDITPATH directories for files matching pattern and open in $EDITOR.\n\n")
@@ -39,7 +40,7 @@ func main() {
 			sortByMtime(files)
 		}
 		iter := newSliceIter(files)
-		runMode(iter, *interactive, *printAll, *useB, "")
+		runMode(iter, *interactive, *printAll, *useB, *useBall, "")
 		return
 	}
 
@@ -68,7 +69,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "edit: %v\n", err)
 				os.Exit(1)
 			}
-			runMode(iter, *interactive, *printAll, *useB, lineSuffix)
+			runMode(iter, *interactive, *printAll, *useB, *useBall, lineSuffix)
 			return
 		}
 
@@ -131,7 +132,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "edit: %v\n", err)
 		os.Exit(1)
 	}
-	runMode(iter, *interactive, *printAll, *useB, lineSuffix)
+	runMode(iter, *interactive, *printAll, *useB, *useBall, lineSuffix)
 }
 
 // relPath returns a relative path if abs is under the current directory,
@@ -148,15 +149,23 @@ func relPath(abs string) string {
 	return abs
 }
 
-func runMode(iter *searchIter, interactive, printAll, useB bool, suffix string) {
-	if useB {
+func runMode(iter *searchIter, interactive, printAll, useB, useBall bool, suffix string) {
+	if useB || useBall {
 		var files []string
-		for {
-			path, ok := iter.Next()
-			if !ok {
-				break
+		if useBall {
+			for {
+				path, ok := iter.Next()
+				if !ok {
+					break
+				}
+				files = append(files, path)
 			}
-			files = append(files, path)
+		} else {
+			path, ok := iter.Next()
+			iter.Close()
+			if ok {
+				files = append(files, path)
+			}
 		}
 		if len(files) == 0 {
 			fmt.Fprintln(os.Stderr, "no matches")
