@@ -171,11 +171,8 @@ func runMode(iter *searchIter, interactive, printAll, useB, useBall bool, suffix
 			fmt.Fprintln(os.Stderr, "no matches")
 			os.Exit(1)
 		}
-		// Append line suffix (e.g. ":123") to each file path.
-		if suffix != "" {
-			for i, f := range files {
-				files[i] = f + suffix
-			}
+		for i, f := range files {
+			files[i] = relPath(f) + suffix
 		}
 		if err := invokeCommand("B", files); err != nil {
 			fmt.Fprintf(os.Stderr, "edit: %v\n", err)
