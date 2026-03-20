@@ -207,7 +207,7 @@ func runMode(iter *searchIter, interactive, printAll, useB, useBall bool, suffix
 			if !ok {
 				break
 			}
-			fmt.Println(relPath(path))
+			fmt.Println(relPath(path) + suffix)
 			found = true
 		}
 		if !found {
